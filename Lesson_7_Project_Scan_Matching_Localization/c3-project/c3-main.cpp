@@ -35,6 +35,36 @@ using namespace std;
 #include <pcl/registration/ndt.h>
 #include <pcl/console/time.h>   // TicToc
 
+// NDT scan matching: aligns source cloud to the target (map) set in ndt object.
+// startingPose is used as the initial guess for the transformation.
+// Returns the 4x4 world-frame transformation matrix.
+Eigen::Matrix4d NDT(
+    pcl::NormalDistributionsTransform<PointT, PointT> ndt,
+    PointCloudT::Ptr source,
+    Pose startingPose,
+    int iterations)
+{
+    pcl::console::TicToc time;
+    time.tic();
+
+    Eigen::Matrix4f init_guess = transform3D(
+        startingPose.rotation.yaw, startingPose.rotation.pitch, startingPose.rotation.roll,
+        startingPose.position.x,   startingPose.position.y,     startingPose.position.z
+    ).cast<float>();
+
+    ndt.setMaximumIterations(iterations);
+    ndt.setInputSource(source);
+
+    PointCloudT::Ptr cloud_ndt(new PointCloudT);
+    ndt.align(*cloud_ndt, init_guess);
+
+    // cout << "NDT converged: " << ndt.hasConverged()
+    //      << "  score: " << ndt.getFitnessScore()
+    //      << "  time: "  << time.toc() << " ms" << endl;
+
+    return ndt.getFinalTransformation().cast<double>();
+}
+
 PointCloudT pclCloud;
 cc::Vehicle::Control control;
 std::chrono::time_point<std::chrono::system_clock> currentTime;
@@ -102,15 +132,22 @@ void drawCar(Pose pose, int num, Color color, double alpha, pcl::visualization::
 int main(){
 
 	auto client = cc::Client("localhost", 2000);
-	client.SetTimeout(2s);
+	client.SetTimeout(10s);
 	auto world = client.GetWorld();
 
 	auto blueprint_library = world.GetBlueprintLibrary();
 	auto vehicles = blueprint_library->Filter("vehicle");
 
 	auto map = world.GetMap();
-	auto transform = map->GetRecommendedSpawnPoints()[1];
-	auto ego_actor = world.SpawnActor((*vehicles)[12], transform);
+	auto spawnPoints = map->GetRecommendedSpawnPoints();
+	boost::shared_ptr<cc::Actor> ego_actor;
+	for (size_t sp = 0; sp < spawnPoints.size() && !ego_actor; ++sp) {
+		ego_actor = world.TrySpawnActor((*vehicles)[12], spawnPoints[sp]);
+	}
+	if (!ego_actor) {
+		std::cerr << "ERROR: Could not spawn ego vehicle at any spawn point" << std::endl;
+		return 1;
+	}
 
 	//Create lidar
 	auto lidar_bp = *(blueprint_library->Find("sensor.lidar.ray_cast"));
@@ -142,6 +179,13 @@ int main(){
   	cout << "Loaded " << mapCloud->points.size() << " data points from map.pcd" << endl;
 	renderPointCloud(viewer, mapCloud, "map", Color(0,0,1)); 
 
+	// Set up NDT object — target is the pre-loaded map (set once, reused every scan)
+	pcl::NormalDistributionsTransform<PointT, PointT> ndt;
+	ndt.setTransformationEpsilon(0.0001);   // convergence criterion
+	ndt.setStepSize(1.0);                   // max step size for More-Thuente line search
+	ndt.setResolution(1.0);                 // voxel grid resolution for NDT covariances
+	ndt.setInputTarget(mapCloud);
+
 	typename pcl::PointCloud<PointT>::Ptr cloudFiltered (new pcl::PointCloud<PointT>);
 	typename pcl::PointCloud<PointT>::Ptr scanCloud (new pcl::PointCloud<PointT>);
 
@@ -150,8 +194,9 @@ int main(){
 		if(new_scan){
 			auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
 			for (auto detection : *scan){
-				if((detection.x*detection.x + detection.y*detection.y + detection.z*detection.z) > 8.0){
-					pclCloud.points.push_back(PointT(detection.x, detection.y, detection.z));
+				float dx = detection.point.x, dy = detection.point.y, dz = detection.point.z;
+				if((dx*dx + dy*dy + dz*dz) > 8.0){
+					pclCloud.points.push_back(PointT(dx, dy, dz));
 				}
 			}
 			if(pclCloud.points.size() > 5000){ // CANDO: Can modify this value to get different scan resolutions
@@ -200,16 +245,24 @@ int main(){
 		if(!new_scan){
 			
 			new_scan = true;
-			// TODO: (Filter scan using voxel filter)
 
-			// TODO: Find pose transform by using ICP or NDT matching
-			//pose = ....
+			// Step 1: Filter scan using voxel filter
+			pcl::VoxelGrid<PointT> vg;
+			vg.setInputCloud(scanCloud);
+			double filterRes = 0.5;  // 0.5m leaf size balances speed vs. detail
+			vg.setLeafSize(filterRes, filterRes, filterRes);
+			vg.filter(*cloudFiltered);
 
-			// TODO: Transform scan so it aligns with ego's actual pose and render that scan
+			// Step 2: Find pose transform using NDT matching
+			Eigen::Matrix4d transform = NDT(ndt, cloudFiltered, pose, 4);
+			pose = getPose(transform);
+
+			// Step 3: Transform the filtered scan into world frame and render it
+			PointCloudT::Ptr transformed_scan(new PointCloudT);
+			pcl::transformPointCloud(*cloudFiltered, *transformed_scan, transform);
 
 			viewer->removePointCloud("scan");
-			// TODO: Change `scanCloud` below to your transformed scan
-			renderPointCloud(viewer, scanCloud, "scan", Color(1,0,0) );
+			renderPointCloud(viewer, transformed_scan, "scan", Color(1,0,0));
 
 			viewer->removeAllShapes();
 			drawCar(pose, 1,  Color(0,1,0), 0.35, viewer);

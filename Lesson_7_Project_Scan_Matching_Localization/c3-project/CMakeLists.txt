@@ -1,12 +1,13 @@
 project(Localization)
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 cmake_minimum_required (VERSION 3.10)
 
 # -g allows for gdb debugging
-# turn on -03 for best performance
-add_definitions(-std=c++14 -O3)
+# turn on -O3 for best performance
+add_compile_options(-O3)
 
 set(CXX_FLAGS "-pthread -fPIC -DNDEBUG -Wextra")
 set(CMAKE_CXX_FLAGS "${CXX_FLAGS} -Wl,-Bstatic -lboost_filesystem -Wl,-Bdynamic")
@@ -32,5 +33,7 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
 endif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
 
 add_executable(cloud_loc ${sources} )
+
+set_target_properties(cloud_loc PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 target_link_libraries(cloud_loc ${PCL_LIBRARIES} ${carla_libs})
