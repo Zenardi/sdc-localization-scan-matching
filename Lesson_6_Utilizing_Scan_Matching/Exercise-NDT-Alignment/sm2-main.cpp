@@ -66,12 +66,23 @@ void keyboardEventOccurred(const pcl::visualization::KeyboardEvent &event, void*
 
 Eigen::Matrix4d NDT(pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt, PointCloudT::Ptr source, Pose startingPose, int iterations){
 
-  	Eigen::Matrix4d transformation_matrix = Eigen::Matrix4d::Identity ();
+	pcl::console::TicToc time;
+	time.tic ();
 
-  	// TODO: Implement the PCL NDT function and return the correct transformation matrix
-  	// .....
+	Eigen::Matrix4f init_guess = transform3D(startingPose.rotation.yaw, startingPose.rotation.pitch, startingPose.rotation.roll, startingPose.position.x, startingPose.position.y, startingPose.position.z).cast<float>();
+
+  	// Setting max number of registration iterations.
+  	ndt.setMaximumIterations (iterations);
+	ndt.setInputSource (source);
   	
-  	return transformation_matrix;
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_ndt (new pcl::PointCloud<pcl::PointXYZ>);
+  	ndt.align (*cloud_ndt, init_guess);
+
+	//cout << "Normal Distributions Transform has converged:" << ndt.hasConverged () << " score: " << ndt.getFitnessScore () <<  " time: " << time.toc() <<  " ms" << endl;
+
+	Eigen::Matrix4d transformation_matrix = ndt.getFinalTransformation ().cast<double>();
+
+	return transformation_matrix;
 
 }
 
@@ -84,6 +95,14 @@ void drawCar(Pose pose, int num, Color color, double alpha, pcl::visualization::
     box.cube_width = 2;
     box.cube_height = 2;
 	renderBox(viewer, box, num, color, alpha);
+}
+
+void loadScans(vector<PointCloudT::Ptr>& scans, int num){
+	for(int index = 0; index < num; index++){
+		PointCloudT::Ptr scanCloud(new PointCloudT);
+		pcl::io::loadPCDFile("scan"+to_string(index+1)+".pcd", *scanCloud);
+		scans.push_back(scanCloud);
+	}
 }
 
 struct Tester{
@@ -150,29 +169,39 @@ int main(){
 
 	// Load map and display it
 	PointCloudT::Ptr mapCloud(new PointCloudT);
-  	pcl::io::loadPCDFile("map.pcd", *mapCloud);
+  	if (pcl::io::loadPCDFile("map.pcd", *mapCloud) == -1) //* load the file
+  	{
+    	PCL_ERROR ("Couldn't read file \n");
+  	}
   	cout << "Loaded " << mapCloud->points.size() << " data points from map.pcd" << endl;
+	
 	renderPointCloud(viewer, mapCloud, "map", Color(0,0,1)); 
 
-	// True pose for the input scan
 	vector<Pose> truePose ={Pose(Point(2.62296,0.0384164,0), Rotate(6.10189e-06,0,0)), Pose(Point(4.91308,0.0732088,0), Rotate(3.16001e-05,0,0))};
-	drawCar(truePose[0], 0,  Color(1,0,0), 0.7, viewer);
 
-	// Load input scan
-	PointCloudT::Ptr scanCloud(new PointCloudT);
-  	pcl::io::loadPCDFile("scan1.pcd", *scanCloud);
-
-	typename pcl::PointCloud<PointT>::Ptr cloudFiltered (new pcl::PointCloud<PointT>);
-
-	cloudFiltered = scanCloud; // TODO: remove this line
-	//TODO: Create voxel filter for input scan and save to cloudFiltered
-	// ......
+	vector<PointCloudT::Ptr> scans;
+	loadScans(scans, 1);
 
 	pcl::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ> ndt;
-	//TODO: Set resolution and point cloud target (map) for ndt
-	// ......
+	// Setting minimum transformation difference for termination condition.
+  	ndt.setTransformationEpsilon (.0001);
+  	// Setting maximum step size for More-Thuente line search.
+  	ndt.setStepSize (1);
+  	//Setting Resolution of NDT grid structure (VoxelGridCovariance).
+  	ndt.setResolution (1);
+  	ndt.setInputTarget (mapCloud);
+
+	drawCar(truePose[0], 0,  Color(1,0,0), 0.7, viewer);
+	
+	pcl::VoxelGrid<PointT> vg;
+  	vg.setInputCloud(scans[0]);
+	double filterRes = 0.5;
+  	vg.setLeafSize(filterRes, filterRes, filterRes);
+	typename pcl::PointCloud<PointT>::Ptr cloudFiltered (new pcl::PointCloud<PointT>);
+  	vg.filter(*cloudFiltered);
 
 	PointCloudT::Ptr transformed_scan (new PointCloudT);
+
 	Tester tester;
 
 	while (!viewer->wasStopped())
@@ -181,7 +210,7 @@ int main(){
 
 		if( matching != Off){
 			if( matching == Ndt)
-				transform = NDT(ndt, cloudFiltered, pose, 0); //TODO: change the number of iterations to positive number
+				transform = NDT(ndt, cloudFiltered, pose, 3);
   			pose = getPose(transform);
 			if( !tester.Displacement(pose) ){
 				if(matching == Ndt)
