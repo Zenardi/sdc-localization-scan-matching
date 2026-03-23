@@ -1,12 +1,17 @@
-project(Localization)
-set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
 cmake_minimum_required (VERSION 3.10)
+
+if(POLICY CMP0144)
+  cmake_policy(SET CMP0144 NEW)
+endif()
+
+project(Localization)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # -g allows for gdb debugging
 # turn on -03 for best performance
-add_definitions(-std=c++14 -O3)
+add_compile_options(-O3)
 
 set(CXX_FLAGS "-pthread -fPIC")
 set(CMAKE_CXX_FLAGS "${CXX_FLAGS}")

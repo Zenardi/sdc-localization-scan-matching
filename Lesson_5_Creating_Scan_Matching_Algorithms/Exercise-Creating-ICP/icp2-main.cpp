@@ -17,6 +17,7 @@ using namespace Eigen;
 Pose pose(Point(0,0,0), Rotate(0,0,0));
 Pose upose = pose;
 vector<int> associations;
+vector<Pair> estimations;
 vector<int> bestAssociations = {5,6,7,8,9,10,11,12,13,14,15,16,16,17,18,19,20,21,22,23,24,25,26,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,62,63,64,65,66,67,68,69,70,71,72,74,75,76,77,78,79,80,81,82,83,84,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,122,123,124,125,126,127,0,1,2,3,4,4};
 bool init = false;
 bool matching = false;
@@ -87,58 +88,120 @@ double Score(vector<int> pairs, PointCloudT::Ptr target, PointCloudT::Ptr source
 
 vector<int> NN(PointCloudT::Ptr target, PointCloudT::Ptr source, Eigen::Matrix4d initTransform, double dist){
 	
+	PointCloudT::Ptr transformSource (new PointCloudT); 
+  	pcl::transformPointCloud (*source, *transformSource, initTransform);
+
+	pcl::KdTreeFLANN<PointT> kdtree;
+	kdtree.setInputCloud (target);
+
 	vector<int> associations;
 
-	// TODO: complete this function which returns a vector of target indicies that correspond to each source index inorder.
-	// E.G. source index 0 -> target index 32, source index 1 -> target index 5, source index 2 -> target index 17, ... 
+	int index = 0;
+	for(PointT point : transformSource->points ){
 
-	// TODO: create a KDtree with target as input
-
-	// TODO: transform source by initTransform
-
-	// TODO loop through each transformed source point and using the KDtree find the transformed source point's nearest target point. Append the nearest point to associaitons 
+		vector<int> pointIdxRadiusSearch;
+  		vector<float> pointRadiusSquaredDistance;
+		if ( kdtree.radiusSearch (point, dist, pointIdxRadiusSearch, pointRadiusSquaredDistance) > 0 )
+ 		{
+			associations.push_back(pointIdxRadiusSearch[0]);
+		}
+		else{
+			associations.push_back(-1);
+		}
+		index++;
+	}
 
 	return associations;
 }
 
 vector<Pair> PairPoints(vector<int> associations, PointCloudT::Ptr target, PointCloudT::Ptr source, bool render, pcl::visualization::PCLVisualizer::Ptr& viewer){
-
 	vector<Pair> pairs;
 
-	// TODO: loop through each source point and using the corresponding associations append a Pair of (source point, associated target point)
-
+	int index = 0;
+	for(PointT point : source->points ){
+		int i = associations[index];
+		if( i >= 0)
+		{
+			PointT association = (*target)[i];
+			if( render){
+				viewer->removeShape(to_string(index));
+				renderRay(viewer, Point(point.x, point.y,0), Point(association.x, association.y,0), to_string(index), Color(0,1,0));
+			}
+			pairs.push_back(Pair(Point(point.x, point.y,0), Point(association.x, association.y,0)) );
+		}
+		index++;
+	}
 	return pairs;
 }
 
 Eigen::Matrix4d ICP(vector<int> associations, PointCloudT::Ptr target, PointCloudT::Ptr source, Pose startingPose, int iterations, pcl::visualization::PCLVisualizer::Ptr& viewer){
 
-  	Eigen::Matrix4d transformation_matrix = Eigen::Matrix4d::Identity();
+  	// align source with starting pose
+  	Eigen::Matrix4d initTransform = transform3D(startingPose.rotation.yaw, startingPose.rotation.pitch, startingPose.rotation.roll, startingPose.position.x, startingPose.position.y, startingPose.position.z);
+  	PointCloudT::Ptr transformSource (new PointCloudT); 
+  	pcl::transformPointCloud (*source, *transformSource, initTransform);
 
-  	// TODO: transform source by startingPose
-  
-  	// TODO: create matrices P and Q which are both 2 x 1 and represent mean point of pairs 1 and pairs 2 respectivley.
-  	// In other words P is the mean point of source and Q is the mean point target 
-  	// P = [ mean p1 x] Q = [ mean p2 x]
-  	//	   [ mean p1 y]	    [ mean p2 y]
+	vector<Pair> pairs = PairPoints(associations, target, transformSource, true, viewer);
 
-  	// TODO: get pairs of points from PairPoints and create matrices X and Y which are both 2 x n where n is number of pairs.
-  	// X is pair 1 x point with pair 2 x point for each column and Y is the same except for y points
-  	// X = [p1 x0 , p1 x1 , p1 x2 , .... , p1 xn ] - [Px]   Y = [p2 x0 , p2 x1 , p2 x2 , .... , p2 xn ] - [Qx]
-  	//     [p1 y0 , p1 y1 , p1 y2 , .... , p1 yn ]   [Py]       [p2 y0 , p2 y1 , p2 y2 , .... , p2 yn ]   [Qy]
+	//cout << "score is " << Score(pairs, Eigen::MatrixXd::Identity(4,4) ) << endl;
 
-  	// TODO: create matrix S using equation 3 from the svd_rot.pdf. Note W is simply the identity matrix because weights are all 1
+	Eigen::MatrixXd X(2,pairs.size());
+	Eigen::MatrixXd Y(2,pairs.size());
+	Eigen::MatrixXd P(2,1);
+	P << Eigen::MatrixXd::Zero(2,1);
+	Eigen::MatrixXd Q(2,1);
+	Q << Eigen::MatrixXd::Zero(2,1);
 
-  	// TODO: create matrix R, the optimal rotation using equation 4 from the svd_rot.pdf and using SVD of S
+	for(Pair pair : pairs){
+		P(0,0) += pair.p1.x;
+		P(1,0) += pair.p1.y;
 
-  	// TODO: create mtarix t, the optimal translatation using equation 5 from svd_rot.pdf
+		Q(0,0) += pair.p2.x;
+		Q(1,0) += pair.p2.y;
+	}
+	P(0,0) = P(0,0)/pairs.size();
+	P(1,0) = P(1,0)/pairs.size();
 
-  	// TODO: set transformation_matrix based on above R, and t matrices
-  	// [ R R 0 t]
-  	// [ R R 0 t]
-  	// [ 0 0 1 0]
-  	// [ 0 0 0 1]
+	Q(0,0) = Q(0,0)/pairs.size();
+	Q(1,0) = Q(1,0)/pairs.size();
+	int index = 0;
+	for(Pair pair : pairs){
+		X(0,index) = pair.p1.x - P(0,0);
+		X(1,index) = pair.p1.y - P(1,0);
 
+		Y(0,index) = pair.p2.x - Q(0,0);
+		Y(1,index) = pair.p2.y - Q(1,0);
+		index++;
+	}
+
+	// compute best R and t from using SVD
+	Eigen::MatrixXd S  = X * Y.transpose();
+	JacobiSVD<MatrixXd> svd(S, ComputeFullV | ComputeFullU);
+	Eigen::MatrixXd D;
+	D.setIdentity(svd.matrixV().cols(), svd.matrixV().cols());
+	D(svd.matrixV().cols()-1,svd.matrixV().cols()-1) = (svd.matrixV() * svd.matrixU().transpose() ).determinant();
+
+	Eigen::MatrixXd R  = svd.matrixV() * D * svd.matrixU().transpose();
+	Eigen::MatrixXd t  = Q - R * P;
+
+	Eigen::Matrix4d transformation_matrix;
+	transformation_matrix << Eigen::MatrixXd::Identity(4,4);
+
+	transformation_matrix(0,0) = R(0,0);
+	transformation_matrix(0,1) = R(0,1);
+	transformation_matrix(1,0) = R(1,0);
+	transformation_matrix(1,1) = R(1,1);
+	transformation_matrix(0,3) = t(0,0);
+	transformation_matrix(1,3) = t(1,0);
+
+	//cout << "score is " << Score(pairs, transformation_matrix ) << endl;
+
+	//cout << transformation_matrix << endl;
+
+	estimations = pairs;
+	transformation_matrix =  transformation_matrix * initTransform;
   	return transformation_matrix;
+
 
 }
 
